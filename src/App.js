@@ -448,6 +448,7 @@ function ScratchJrShell() {
 
       <header className="top-navbar">
         <Toolbar
+          selectedActorId={selectedActorId}
           onSave={handleSave}
           onLoad={handleLoad}
           onFullScreen={handleFullscreen}
@@ -501,7 +502,7 @@ function ScratchJrShell() {
             <CategorySelector />
           </div>
           <div className="block-palette-container">
-            <BlockPalette selectedActorId={selectedActorId}  />
+            <BlockPalette  />
           </div>
         </div>
       </footer>

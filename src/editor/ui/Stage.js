@@ -1,32 +1,38 @@
-import React, { useState, useRef } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { moveActor, pushUndoState } from '../../store/sceneSlice';
+import React, { useState, useRef } from "react";
+import { useSelector, useDispatch } from "react-redux";
+import { moveActor, pushUndoState } from "../../store/sceneSlice";
 import { run } from "../../utils/runScript";
-import '../../css/Stage.css';
+import "../../css/Stage.css";
 
-const GRID_WIDTH = 20;
-const GRID_HEIGHT = 17;
-const CELL_SIZE = 32;
-const DRAG_THRESHOLD = 5; // pixels - only start dragging after moving this much
+const GRID_WIDTH     = 20;
+const GRID_HEIGHT    = 17;
+const CELL_SIZE      = 32;
+const DRAG_THRESHOLD = 5;      // px before we call it a drag
 
-export default function Stage({ selectedActorId, setSelectedActorId, heading, showGrid, forceUpdate }) {
+export default function Stage({
+  selectedActorId,
+  setSelectedActorId,
+  heading,
+  showGrid,
+}) {
   const dispatch = useDispatch();
-  const { scenes, currentIndex } = useSelector(state => ({
-    scenes: state.scene.scenes,
-    currentIndex: state.scene.currentSceneIndex,
-  }));
-  
-  const scene = scenes[currentIndex];
+
+  /* ─────── scene data ─────── */
+  const { scenes, currentSceneIndex } = useSelector((s) => s.scene);
+  const scene  = scenes[currentSceneIndex];
   const actors = scene?.actors ?? [];
-  const containerRef = useRef();
 
-  const [draggedId, setDraggedId] = useState(null);
-  const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0 });
-  const [hasActuallyDragged, setHasActuallyDragged] = useState(false);
+  /* ─────── refs & state ─────── */
+  const containerRef  = useRef(null);
+  const draggingRef   = useRef(false);   // live “am I dragging?”
+  const movedRef      = useRef(false);   // remembers if threshold crossed
 
+  const [draggedId,     setDraggedId]   = useState(null);
+  const [dragStartPos,  setDragStart]   = useState({ x: 0, y: 0 });
+  const [dragOffset,    setDragOffset]  = useState({ x: 0, y: 0 });
+  const [dragPosition,  setDragPos]     = useState({ x: 0, y: 0 });
+
+  /* ─────── helpers ─────── */
   const background = scene?.background || "#ffffff";
   const bgStyle = background.startsWith("#")
     ? { backgroundColor: background }
@@ -34,133 +40,137 @@ export default function Stage({ selectedActorId, setSelectedActorId, heading, sh
         backgroundImage: `url(${background})`,
         backgroundSize: "cover",
         backgroundPosition: "center",
-        backgroundRepeat: "no-repeat"
+        backgroundRepeat: "no-repeat",
       };
 
-  function calculateGridPosition(clientX, clientY) {
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+  }
+
+  function stageCoords(clientX, clientY) {
     const rect = containerRef.current.getBoundingClientRect();
-    let left = clientX - rect.left - dragOffset.x;
-    let top = clientY - rect.top - dragOffset.y;
-    left = Math.min(Math.max(left, CELL_SIZE / 2), (GRID_WIDTH - 0.5) * CELL_SIZE);
-    top = Math.min(Math.max(top, CELL_SIZE / 2), (GRID_HEIGHT - 0.5) * CELL_SIZE);
+    const left = clamp(
+      clientX - rect.left - dragOffset.x,
+      CELL_SIZE / 2,
+      (GRID_WIDTH - 0.5) * CELL_SIZE
+    );
+    const top = clamp(
+      clientY - rect.top - dragOffset.y,
+      CELL_SIZE / 2,
+      (GRID_HEIGHT - 0.5) * CELL_SIZE
+    );
     return { x: left, y: top };
   }
 
+  /* ─────── drag handlers ─────── */
   function onDragStart(e, actor) {
     e.preventDefault();
     if (!containerRef.current) return;
-    
+
     const rect = containerRef.current.getBoundingClientRect();
     const actorLeft = (actor.x + 0.5) * CELL_SIZE;
-    const actorTop = (actor.y + 0.5) * CELL_SIZE;
-    const clientX = e.clientX ?? e.touches[0].clientX;
-    const clientY = e.clientY ?? e.touches[0].clientY;
-    
-    // Store initial positions
+    const actorTop  = (actor.y + 0.5) * CELL_SIZE;
+    const clientX   = e.clientX ?? e.touches[0].clientX;
+    const clientY   = e.clientY ?? e.touches[0].clientY;
+
     setDraggedId(actor.id);
-    setDragStartPos({ x: clientX, y: clientY });
-    setDragOffset({ x: clientX - rect.left - actorLeft, y: clientY - rect.top - actorTop });
-    setDragPosition({ x: actorLeft, y: actorTop });
     setSelectedActorId(actor.id);
-    setHasActuallyDragged(false);
-    
-    // Don't set isDragging true yet - wait for actual movement
-    
-    window.addEventListener('mousemove', onDragMove);
-    window.addEventListener('mouseup', onDragEnd);
-    window.addEventListener('touchmove', onDragMove, { passive: false });
-    window.addEventListener('touchend', onDragEnd);
+
+    setDragOffset({ x: clientX - rect.left - actorLeft, y: clientY - rect.top - actorTop });
+    setDragPos({ x: actorLeft, y: actorTop });
+    setDragStart({ x: clientX, y: clientY });
+
+    draggingRef.current = false;
+    movedRef.current    = false;
+
+    window.addEventListener("mousemove", onDragMove);
+    window.addEventListener("mouseup",   onDragEnd);
+    window.addEventListener("touchmove", onDragMove, { passive: false });
+    window.addEventListener("touchend",  onDragEnd);
   }
 
   function onDragMove(e) {
     e.preventDefault();
-    if (!draggedId || !containerRef.current) return;
-    
+    if (!draggedId) return;
+
     const clientX = e.clientX ?? e.touches[0].clientX;
     const clientY = e.clientY ?? e.touches[0].clientY;
-    
-    // Check if we've moved enough to start dragging
-    const deltaX = Math.abs(clientX - dragStartPos.x);
-    const deltaY = Math.abs(clientY - dragStartPos.y);
-    
-    if (!isDragging && (deltaX > DRAG_THRESHOLD || deltaY > DRAG_THRESHOLD)) {
-      setIsDragging(true);
-      setHasActuallyDragged(true);
+    const dx = Math.abs(clientX - dragStartPos.x);
+    const dy = Math.abs(clientY - dragStartPos.y);
+
+    if (!draggingRef.current && (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD)) {
+      draggingRef.current = true;
+      movedRef.current    = true;
     }
-    
-    if (isDragging) {
-      const pos = calculateGridPosition(clientX, clientY);
-      setDragPosition(pos);
+
+    if (draggingRef.current) {
+      setDragPos(stageCoords(clientX, clientY));
     }
   }
 
   function onDragEnd(e) {
     e.preventDefault();
     if (!draggedId) return;
-    
-    // Only process as drag if we actually dragged
-    if (hasActuallyDragged && isDragging) {
-      const clientX = e.clientX ?? (e.changedTouches ? e.changedTouches[0].clientX : 0);
-      const clientY = e.clientY ?? (e.changedTouches ? e.changedTouches[0].clientY : 0);
-      const pos = calculateGridPosition(clientX, clientY);
+
+    if (draggingRef.current) {
+      const clientX = e.clientX ?? e.changedTouches?.[0]?.clientX;
+      const clientY = e.clientY ?? e.changedTouches?.[0]?.clientY;
+      const pos = stageCoords(clientX, clientY);
       const gridX = Math.round(pos.x / CELL_SIZE - 0.5);
       const gridY = Math.round(pos.y / CELL_SIZE - 0.5);
-      const actor = actors.find(actor => actor.id === draggedId);
-      
+
+      const actor = actors.find((a) => a.id === draggedId);
       if (actor && (gridX !== actor.x || gridY !== actor.y)) {
         dispatch(pushUndoState());
         dispatch(moveActor({ actorId: actor.id, dx: gridX - actor.x, dy: gridY - actor.y }));
       }
     }
-    
-    // Reset all drag states
+
+    /* reset everything */
+    draggingRef.current = false;
     setDraggedId(null);
     setDragOffset({ x: 0, y: 0 });
-    setDragPosition({ x: 0, y: 0 });
-    setIsDragging(false);
-    setHasActuallyDragged(false);
-    setDragStartPos({ x: 0, y: 0 });
-    
-    window.removeEventListener('mousemove', onDragMove);
-    window.removeEventListener('mouseup', onDragEnd);
-    window.removeEventListener('touchmove', onDragMove);
-    window.removeEventListener('touchend', onDragEnd);
+    setDragPos({ x: 0, y: 0 });
+
+    window.removeEventListener("mousemove", onDragMove);
+    window.removeEventListener("mouseup",   onDragEnd);
+    window.removeEventListener("touchmove", onDragMove);
+    window.removeEventListener("touchend",  onDragEnd);
   }
 
+  /* ─────── tap handler ─────── */
   const handleActorTap = (actor, e) => {
     e.stopPropagation();
-    
-    // Only process as click if we didn't actually drag
-    if (!hasActuallyDragged) {
-      setSelectedActorId(actor.id);
+    if (movedRef.current) {
+      movedRef.current = false;   // reset for next click
+      return;                     // ignore click after a drag
+    }
 
-      const hasTapScript = actor.scripts?.some(
-        (block) => block.category === "start" && block.name === "Start On Tap"
+    setSelectedActorId(actor.id);
+
+    const hasTap = actor.scripts?.some(
+      (b) => b.category === "start" && b.name === "Start On Tap"
+    );
+    if (hasTap) {
+      run(actor, dispatch, scene?.sounds, actor.id).catch((err) =>
+        console.error("tap-script error:", err)
       );
-
-      if (hasTapScript) {
-        run(actor, dispatch, scene?.sounds, actor.id).catch(err => {
-          console.error("Error running tap script:", err);
-        });
-      }
     }
   };
 
+  /* ─────── render ─────── */
   return (
     <div
       ref={containerRef}
       id="stage-area"
       style={{
         ...bgStyle,
-        position: 'relative',
-        width: `${GRID_WIDTH * CELL_SIZE}px`,
-        height: `${GRID_HEIGHT * CELL_SIZE}px`,
-        border: 'none',
-        margin: 'auto',
-        borderRadius: '0',
-        boxShadow: 'none',
-        userSelect: 'none',
-        overflow: 'hidden',
+        position: "relative",
+        width:  GRID_WIDTH  * CELL_SIZE,
+        height: GRID_HEIGHT * CELL_SIZE,
+        margin: "auto",
+        userSelect: "none",
+        overflow: "hidden",
       }}
     >
       {showGrid && <GridOverlay cols={GRID_WIDTH} rows={GRID_HEIGHT} cellSize={CELL_SIZE} />}
@@ -170,14 +180,17 @@ export default function Stage({ selectedActorId, setSelectedActorId, heading, sh
           style={{
             position: "absolute",
             width: "100%",
-            textAlign: "center",
-            left: 0,
             top: 8,
+            left: 0,
+            textAlign: "center",
             color: heading.color,
             fontSize: heading.size,
             fontWeight: "bold",
-            textShadow: heading.color === "#fff" ? "0 2px 7px #20398880" : "0 1px 3px #ffffff70",
             pointerEvents: "none",
+            textShadow:
+              heading.color === "#fff"
+                ? "0 2px 7px #20398880"
+                : "0 1px 3px #ffffff70",
             zIndex: 8,
           }}
         >
@@ -185,12 +198,14 @@ export default function Stage({ selectedActorId, setSelectedActorId, heading, sh
         </div>
       )}
 
-      {actors.map(actor => {
-        const isBeingDragged = draggedId === actor.id && isDragging;
-        const left = isBeingDragged ? dragPosition.x : (actor.x + 0.5) * CELL_SIZE;
-        const top = isBeingDragged ? dragPosition.y : (actor.y + 0.5) * CELL_SIZE;
+      {actors.map((actor) => {
+        if (actor.visible === false) return null;   // hidden actors
+
+        const isDragged  = draggedId === actor.id && draggingRef.current;
+        const left = isDragged ? dragPosition.x : (actor.x + 0.5) * CELL_SIZE;
+        const top  = isDragged ? dragPosition.y : (actor.y + 0.5) * CELL_SIZE;
+        const size = CELL_SIZE * 4 * (actor.size || 1);
         const isSelected = actor.id === selectedActorId;
-        const actorSize = actor.size || 1;
 
         return (
           <img
@@ -198,25 +213,21 @@ export default function Stage({ selectedActorId, setSelectedActorId, heading, sh
             src={actor.image}
             alt={actor.name}
             draggable={false}
-            className={`actor${isSelected ? ' selected' : ''}`}
-            onMouseDown={e => onDragStart(e, actor)}
-            onTouchStart={e => onDragStart(e, actor)}
-            onClick={(e) => handleActorTap(actor, e)}  
+            className={`actor${isSelected ? " selected" : ""}`}
+            onMouseDown={(e) => onDragStart(e, actor)}
+            onTouchStart={(e) => onDragStart(e, actor)}
+            onClick={(e) => handleActorTap(actor, e)}
             style={{
-              position: 'absolute',
-              width: CELL_SIZE * 4 * actorSize,
-              height: CELL_SIZE * 4 * actorSize,
-              left: left,
-              top: top,
+              position: "absolute",
+              width: size,
+              height: size,
+              left,
+              top,
               transform: `translate(-50%, -50%) rotate(${actor.direction || 0}deg)`,
-              cursor: actor.visible === false ? 'default' : 'grab',
-              transition: isBeingDragged 
-                ? 'none' 
-                : 'left 0.1s linear, top 0.1s linear, width 0.2s ease, height 0.2s ease, opacity 0.3s ease',
+              cursor: "grab",
+              transition: isDragged ? "none" : "left 0.1s linear, top 0.1s linear",
               zIndex: isSelected ? 10 : 1,
-              userSelect: 'none',
-              opacity: actor.visible === false ? 0 : 1,
-              pointerEvents: actor.visible === false ? 'none' : 'auto',
+              userSelect: "none",
             }}
           />
         );
@@ -225,6 +236,7 @@ export default function Stage({ selectedActorId, setSelectedActorId, heading, sh
   );
 }
 
+/* ─────── grid overlay ─────── */
 function GridOverlay({ cols, rows, cellSize }) {
   return (
     <svg
@@ -236,9 +248,9 @@ function GridOverlay({ cols, rows, cellSize }) {
       {[...Array(cols + 1)].map((_, i) => (
         <line
           key={`v${i}`}
-          x1={(i * 100) / cols + '%'}
+          x1={`${(i * 100) / cols}%`}
           y1="0"
-          x2={(i * 100) / cols + '%'}
+          x2={`${(i * 100) / cols}%`}
           y2="100%"
           stroke="#bbb"
           strokeWidth="1"
@@ -248,9 +260,9 @@ function GridOverlay({ cols, rows, cellSize }) {
         <line
           key={`h${i}`}
           x1="0"
-          y1={(i * 100) / rows + '%'}
+          y1={`${(i * 100) / rows}%`}
           x2="100%"
-          y2={(i * 100) / rows + '%'}
+          y2={`${(i * 100) / rows}%`}
           stroke="#bbb"
           strokeWidth="1"
         />
