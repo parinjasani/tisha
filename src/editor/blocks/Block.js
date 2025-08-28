@@ -2,7 +2,7 @@ import React, { useState, useRef } from "react";
 import "../../css/BlockPalette.css";
 import { useSelector, useDispatch } from "react-redux";
 import { addBlockToScript, addCustomSound } from "../../store/sceneSlice";
-
+import { run } from "../../utils/runScript";
 // Puzzle backgrounds per category
 const puzzleBgByCategory = {
   start: "/assets/blocks/start.svg",
@@ -246,9 +246,13 @@ function VoiceRecordModal({ isOpen, onClose, onSave }) {
   );
 }
 
-export default function BlockPalette() {
+export default function BlockPalette({ selectedActorId }) {
   const dispatch = useDispatch();
   const [showVoiceModal, setShowVoiceModal] = useState(false);
+
+  const { scenes, currentSceneIndex } = useSelector((s) => s.scene);
+    const scene = scenes[currentSceneIndex];
+    const actor = scene?.actors.find((a) => a.id === selectedActorId);
 
   const selectedBlockCategory = useSelector((s) => s.scene.selectedBlockCategory) || "motion";
   const customSounds = useSelector((s) => s.scene.customSounds) || [];
@@ -299,10 +303,18 @@ export default function BlockPalette() {
     event.dataTransfer.setData("application/block", JSON.stringify(data));
   };
 
-  const handleBlockClick = (block) => {
+  const handleBlockClick = async (block) => {
     if (block.name === "Record") {
       setShowVoiceModal(true);
     }
+    if (block.name === "Start on Green Flag") {
+          try {
+            await run(actor, dispatch, scene?.sounds, actor.id); // pass dispatch + actor + scene
+          } catch (err) {
+            console.error("Error while running script:", err);
+          }
+          return;
+        }
   };
 
   const handleVoiceSave = (customSoundData) => {

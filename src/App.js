@@ -501,7 +501,7 @@ function ScratchJrShell() {
             <CategorySelector />
           </div>
           <div className="block-palette-container">
-            <BlockPalette />
+            <BlockPalette selectedActorId={selectedActorId}  />
           </div>
         </div>
       </footer>
